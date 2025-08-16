@@ -122,9 +122,13 @@ export function ProductManagement({ farmerId }: ProductManagementProps) {
             <Card key={product.id} className="overflow-hidden">
               <div className="aspect-w-16 aspect-h-9 bg-gray-200 mb-4">
                 <img
-                  src={product.images[0] || 'https://images.pexels.com/photos/1059943/pexels-photo-1059943.jpeg?auto=compress&cs=tinysrgb&w=400'}
+                  src={product.images && product.images.length > 0 ? product.images[0] : 'https://images.pexels.com/photos/1059943/pexels-photo-1059943.jpeg?auto=compress&cs=tinysrgb&w=400'}
                   alt={product.name}
                   className="w-full h-32 object-cover rounded-lg"
+                  onError={(e) => {
+                    const target = e.target as HTMLImageElement;
+                    target.src = 'https://images.pexels.com/photos/1059943/pexels-photo-1059943.jpeg?auto=compress&cs=tinysrgb&w=400';
+                  }}
                 />
               </div>
               

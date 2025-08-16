@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Upload } from 'lucide-react';
+import { ArrowLeft, Upload, X, Plus } from 'lucide-react';
 import { Product } from '../../types';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
@@ -18,7 +18,7 @@ export function ProductForm({ product, onSave, onCancel }: ProductFormProps) {
     unit: product?.unit || 'per kg',
     description: product?.description || '',
     stock: product?.stock || 0,
-    images: product?.images || ['https://images.pexels.com/photos/1059943/pexels-photo-1059943.jpeg?auto=compress&cs=tinysrgb&w=400'],
+    images: product?.images || [],
     location: product?.location || {
       lat: -1.9441,
       lng: 30.0619,
@@ -29,6 +29,8 @@ export function ProductForm({ product, onSave, onCancel }: ProductFormProps) {
       ...product?.quality
     }
   });
+  const [uploading, setUploading] = useState(false);
+  const [imageUrl, setImageUrl] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,6 +55,73 @@ export function ProductForm({ product, onSave, onCancel }: ProductFormProps) {
         [name]: type === 'number' ? Number(value) : type === 'checkbox' ? (e.target as HTMLInputElement).checked : value
       }));
     }
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file size (5MB limit)
+    if (file.size > 5 * 1024 * 1024) {
+      alert('File size must be less than 5MB');
+      return;
+    }
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+
+      const token = localStorage.getItem('authToken');
+      const response = await fetch('http://localhost:3001/api/upload', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setFormData(prev => ({
+          ...prev,
+          images: [...prev.images, data.url]
+        }));
+        // Clear the file input
+        e.target.value = '';
+      } else {
+        const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
+        alert(errorData.error || 'Failed to upload image');
+      }
+    } catch (error) {
+      console.error('Upload error:', error);
+      alert('Failed to upload image');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const addImageUrl = () => {
+    if (imageUrl.trim()) {
+      setFormData(prev => ({
+        ...prev,
+        images: [...prev.images, imageUrl.trim()]
+      }));
+      setImageUrl('');
+    }
+  };
+
+  const removeImage = (index: number) => {
+    setFormData(prev => ({
+      ...prev,
+      images: prev.images.filter((_, i) => i !== index)
+    }));
   };
 
   return (
@@ -161,6 +230,74 @@ export function ProductForm({ product, onSave, onCancel }: ProductFormProps) {
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500 focus:border-transparent"
                 placeholder="e.g., Kigali, Rwanda"
               />
+            </div>
+          </div>
+
+          {/* Product Images */}
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Product Images
+            </label>
+            
+            {/* Current Images */}
+            {formData.images.length > 0 && (
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
+                {formData.images.map((image, index) => (
+                  <div key={index} className="relative">
+                    <img
+                      src={image}
+                      alt={`Product ${index + 1}`}
+                      className="w-full h-32 object-cover rounded-lg border border-gray-300"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeImage(index)}
+                      className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Upload Image */}
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-gray-600 mb-2">Upload Image</label>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleImageUpload}
+                    disabled={uploading}
+                    className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100"
+                  />
+                  {uploading && <span className="text-sm text-gray-500">Uploading...</span>}
+                </div>
+              </div>
+
+              {/* Add Image URL */}
+              <div>
+                <label className="block text-sm text-gray-600 mb-2">Or add image URL</label>
+                <div className="flex space-x-2">
+                  <input
+                    type="url"
+                    value={imageUrl}
+                    onChange={(e) => setImageUrl(e.target.value)}
+                    placeholder="https://example.com/image.jpg"
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={addImageUrl}
+                    disabled={!imageUrl.trim()}
+                  >
+                    <Plus className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
             </div>
           </div>
 

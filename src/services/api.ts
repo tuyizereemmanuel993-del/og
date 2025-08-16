@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://localhost:3001/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
 class ApiService {
   private static getAuthHeaders(): HeadersInit {
@@ -11,10 +11,20 @@ class ApiService {
 
   private static async handleResponse(response: Response) {
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Network error' }));
+      let error;
+      try {
+        error = await response.json();
+      } catch {
+        error = { error: `HTTP ${response.status}: ${response.statusText}` };
+      }
       throw new Error(error.error || 'Request failed');
     }
-    return response.json();
+    
+    const contentType = response.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      return response.json();
+    }
+    return response.text();
   }
 
   // Auth endpoints
@@ -44,6 +54,23 @@ class ApiService {
       localStorage.setItem('authToken', data.token);
     }
     return data;
+  }
+
+  // File upload endpoint
+  static async uploadFile(file: File) {
+    const formData = new FormData();
+    formData.append('image', file);
+
+    const response = await fetch(`${API_BASE_URL}/upload`, {
+      method: 'POST',
+      headers: {
+        ...this.getAuthHeaders(),
+        // Don't set Content-Type for FormData, let browser set it with boundary
+      },
+      body: formData
+    });
+    
+    return this.handleResponse(response);
   }
 
   // User endpoints

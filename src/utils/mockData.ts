@@ -5,6 +5,9 @@ import { UserService } from '../services/userService';
 // Initialize sample data in database
 export const initializeSampleData = async () => {
   try {
+    // Wait a bit for the server to be ready
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
     // Check if sample data already exists
     const existingProducts = await ProductService.getAllProducts();
     if (existingProducts.length > 0) {
@@ -78,6 +81,7 @@ export const initializeSampleData = async () => {
     console.log('Sample data initialized successfully');
   } catch (error) {
     console.error('Error initializing sample data:', error);
+    // Don't throw the error, just log it
   }
 };
 

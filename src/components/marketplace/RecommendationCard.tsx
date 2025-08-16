@@ -22,9 +22,13 @@ export function RecommendationCard({
     <Card className="border-green-200 bg-gradient-to-r from-green-50 to-white">
       <div className="flex items-start space-x-4">
         <img
-          src={product.images[0]}
+          src={product.images[0] || 'https://images.pexels.com/photos/1059943/pexels-photo-1059943.jpeg?auto=compress&cs=tinysrgb&w=400'}
           alt={product.name}
           className="w-20 h-20 rounded-lg object-cover"
+          onError={(e) => {
+            const target = e.target as HTMLImageElement;
+            target.src = 'https://images.pexels.com/photos/1059943/pexels-photo-1059943.jpeg?auto=compress&cs=tinysrgb&w=400';
+          }}
         />
         
         <div className="flex-1 min-w-0">

@@ -4,18 +4,64 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const multer = require('multer');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, uploadsDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit
+  },
+  fileFilter: function (req, file, cb) {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'), false);
+    }
+  }
+});
+
 // Middleware
-app.use(cors());
-app.use(express.json());
+app.use(cors({
+  origin: ['http://localhost:5173', 'http://localhost:3000'],
+  credentials: true
+}));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Serve uploaded files
+app.use('/uploads', express.static(uploadsDir));
 
 // Database setup
 const dbPath = path.join(__dirname, 'agriconnect.db');
-const db = new sqlite3.Database(dbPath);
+const db = new sqlite3.Database(dbPath, (err) => {
+  if (err) {
+    console.error('Error opening database:', err);
+  } else {
+    console.log('Connected to SQLite database');
+  }
+});
 
 // Initialize database tables
 const initializeDatabase = () => {
@@ -176,6 +222,8 @@ const insertDefaultUsers = async () => {
           (err) => {
             if (err) {
               console.error('Error inserting default user:', err);
+            } else {
+              console.log(`Default user ${user.email} created`);
             }
           }
         );
@@ -190,73 +238,110 @@ const authenticateToken = (req, res, next) => {
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
-    return res.sendStatus(401);
+    return res.status(401).json({ error: 'Access token required' });
   }
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.sendStatus(403);
+    if (err) {
+      return res.status(403).json({ error: 'Invalid or expired token' });
+    }
     req.user = user;
     next();
   });
 };
 
+// Error handling middleware
+const handleError = (err, req, res, next) => {
+  console.error('Error:', err);
+  res.status(500).json({ error: err.message || 'Internal server error' });
+};
+
+// File upload endpoint
+app.post('/api/upload', authenticateToken, upload.single('image'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const fileUrl = `http://localhost:${PORT}/uploads/${req.file.filename}`;
+    res.json({ url: fileUrl });
+  } catch (error) {
+    console.error('Upload error:', error);
+    res.status(500).json({ error: 'File upload failed' });
+  }
+});
+
 // Auth routes
 app.post('/api/auth/signin', async (req, res) => {
-  const { email, password } = req.body;
+  try {
+    const { email, password } = req.body;
 
-  db.get('SELECT * FROM users WHERE email = ? AND is_active = 1', [email], async (err, user) => {
-    if (err) {
-      return res.status(500).json({ error: 'Database error' });
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
+    db.get('SELECT * FROM users WHERE email = ? AND is_active = 1', [email], async (err, user) => {
+      if (err) {
+        console.error('Database error:', err);
+        return res.status(500).json({ error: 'Database error' });
+      }
 
-    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, {
-      expiresIn: '24h'
+      if (!user || !(await bcrypt.compare(password, user.password))) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+
+      const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, {
+        expiresIn: '24h'
+      });
+
+      // Format user data
+      const userData = {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        phone: user.phone,
+        avatar: user.avatar,
+        location: {
+          lat: user.location_lat,
+          lng: user.location_lng,
+          address: user.location_address
+        },
+        createdAt: user.created_at,
+        isActive: user.is_active
+      };
+
+      // Add farm data for farmers
+      if (user.role === 'farmer') {
+        userData.farm = {
+          name: user.farm_name,
+          description: user.farm_description,
+          certifications: user.farm_certifications ? JSON.parse(user.farm_certifications) : [],
+          establishedYear: user.farm_established_year
+        };
+        userData.stats = {
+          totalOrders: user.stats_total_orders,
+          rating: user.stats_rating,
+          totalRevenue: user.stats_total_revenue
+        };
+      }
+
+      res.json({ user: userData, token });
     });
-
-    // Format user data
-    const userData = {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      phone: user.phone,
-      avatar: user.avatar,
-      location: {
-        lat: user.location_lat,
-        lng: user.location_lng,
-        address: user.location_address
-      },
-      createdAt: user.created_at,
-      isActive: user.is_active
-    };
-
-    // Add farm data for farmers
-    if (user.role === 'farmer') {
-      userData.farm = {
-        name: user.farm_name,
-        description: user.farm_description,
-        certifications: user.farm_certifications ? JSON.parse(user.farm_certifications) : [],
-        establishedYear: user.farm_established_year
-      };
-      userData.stats = {
-        totalOrders: user.stats_total_orders,
-        rating: user.stats_rating,
-        totalRevenue: user.stats_total_revenue
-      };
-    }
-
-    res.json({ user: userData, token });
-  });
+  } catch (error) {
+    console.error('Sign in error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 app.post('/api/auth/signup', async (req, res) => {
-  const { name, email, password, phone, role, location } = req.body;
-
   try {
+    const { name, email, password, phone, role, location } = req.body;
+
+    if (!name || !email || !password || !phone || !role) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
     const userId = Date.now().toString();
 
@@ -269,7 +354,7 @@ app.post('/api/auth/signup', async (req, res) => {
       phone,
       location_lat: -1.9441, // Default to Kigali
       location_lng: 30.0619,
-      location_address: location,
+      location_address: location || 'Kigali, Rwanda',
       created_at: new Date().toISOString(),
       is_active: 1
     };
@@ -286,6 +371,7 @@ app.post('/api/auth/signup', async (req, res) => {
           if (err.code === 'SQLITE_CONSTRAINT') {
             return res.status(400).json({ error: 'Email already exists' });
           }
+          console.error('Database error:', err);
           return res.status(500).json({ error: 'Database error' });
         }
 
@@ -302,7 +388,7 @@ app.post('/api/auth/signup', async (req, res) => {
           location: {
             lat: -1.9441,
             lng: 30.0619,
-            address: location
+            address: location || 'Kigali, Rwanda'
           },
           createdAt: new Date(),
           isActive: true
@@ -312,6 +398,7 @@ app.post('/api/auth/signup', async (req, res) => {
       }
     );
   } catch (error) {
+    console.error('Sign up error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -320,6 +407,7 @@ app.post('/api/auth/signup', async (req, res) => {
 app.get('/api/users', authenticateToken, (req, res) => {
   db.all('SELECT * FROM users', (err, users) => {
     if (err) {
+      console.error('Database error:', err);
       return res.status(500).json({ error: 'Database error' });
     }
 
@@ -361,6 +449,7 @@ app.get('/api/users/:id', authenticateToken, (req, res) => {
 
   db.get('SELECT * FROM users WHERE id = ?', [id], (err, user) => {
     if (err) {
+      console.error('Database error:', err);
       return res.status(500).json({ error: 'Database error' });
     }
 
@@ -441,6 +530,7 @@ app.put('/api/users/:id', authenticateToken, (req, res) => {
 
   db.run(query, values, function(err) {
     if (err) {
+      console.error('Database error:', err);
       return res.status(500).json({ error: 'Database error' });
     }
 
@@ -457,6 +547,7 @@ app.delete('/api/users/:id', authenticateToken, (req, res) => {
 
   db.run('DELETE FROM users WHERE id = ?', [id], function(err) {
     if (err) {
+      console.error('Database error:', err);
       return res.status(500).json({ error: 'Database error' });
     }
 
@@ -482,6 +573,7 @@ app.get('/api/products', (req, res) => {
 
   db.all(query, params, (err, products) => {
     if (err) {
+      console.error('Database error:', err);
       return res.status(500).json({ error: 'Database error' });
     }
 
@@ -516,47 +608,59 @@ app.get('/api/products', (req, res) => {
 });
 
 app.post('/api/products', authenticateToken, (req, res) => {
-  const productData = req.body;
-  const id = Date.now().toString();
-  const now = new Date().toISOString();
+  try {
+    const productData = req.body;
+    const id = Date.now().toString();
+    const now = new Date().toISOString();
 
-  const product = {
-    id,
-    farmer_id: productData.farmerId,
-    name: productData.name,
-    category: productData.category,
-    price: productData.price,
-    unit: productData.unit,
-    description: productData.description,
-    images: JSON.stringify(productData.images || []),
-    stock: productData.stock || 0,
-    quality_rating: productData.quality?.rating || 0,
-    quality_reviews: productData.quality?.reviews || 0,
-    quality_organic: productData.quality?.organic || false,
-    quality_freshness: productData.quality?.freshness || 100,
-    location_lat: productData.location?.lat || -1.9441,
-    location_lng: productData.location?.lng || 30.0619,
-    location_address: productData.location?.address || 'Kigali, Rwanda',
-    created_at: now,
-    updated_at: now,
-    is_active: true
-  };
+    const product = {
+      id,
+      farmer_id: productData.farmerId,
+      name: productData.name,
+      category: productData.category,
+      price: productData.price,
+      unit: productData.unit,
+      description: productData.description,
+      images: JSON.stringify(productData.images || []),
+      stock: productData.stock || 0,
+      quality_rating: productData.quality?.rating || 0,
+      quality_reviews: productData.quality?.reviews || 0,
+      quality_organic: productData.quality?.organic || false,
+      quality_freshness: productData.quality?.freshness || 100,
+      location_lat: productData.location?.lat || -1.9441,
+      location_lng: productData.location?.lng || 30.0619,
+      location_address: productData.location?.address || 'Kigali, Rwanda',
+      created_at: now,
+      updated_at: now,
+      is_active: true
+    };
 
-  const columns = Object.keys(product).join(', ');
-  const placeholders = Object.keys(product).map(() => '?').join(', ');
-  const values = Object.values(product);
+    const columns = Object.keys(product).join(', ');
+    const placeholders = Object.keys(product).map(() => '?').join(', ');
+    const values = Object.values(product);
 
-  db.run(
-    `INSERT INTO products (${columns}) VALUES (${placeholders})`,
-    values,
-    function(err) {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
+    db.run(
+      `INSERT INTO products (${columns}) VALUES (${placeholders})`,
+      values,
+      function(err) {
+        if (err) {
+          console.error('Database error:', err);
+          return res.status(500).json({ error: 'Database error' });
+        }
+
+        res.json({ 
+          id, 
+          ...productData,
+          createdAt: now,
+          updatedAt: now,
+          isActive: true
+        });
       }
-
-      res.json({ id, ...productData });
-    }
-  );
+    );
+  } catch (error) {
+    console.error('Create product error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 app.put('/api/products/:id', authenticateToken, (req, res) => {
@@ -597,6 +701,7 @@ app.put('/api/products/:id', authenticateToken, (req, res) => {
 
   db.run(query, values, function(err) {
     if (err) {
+      console.error('Database error:', err);
       return res.status(500).json({ error: 'Database error' });
     }
 
@@ -613,6 +718,7 @@ app.delete('/api/products/:id', authenticateToken, (req, res) => {
 
   db.run('DELETE FROM products WHERE id = ?', [id], function(err) {
     if (err) {
+      console.error('Database error:', err);
       return res.status(500).json({ error: 'Database error' });
     }
 
@@ -651,6 +757,7 @@ app.get('/api/orders', authenticateToken, (req, res) => {
 
   db.all(query, params, (err, orders) => {
     if (err) {
+      console.error('Database error:', err);
       return res.status(500).json({ error: 'Database error' });
     }
 
@@ -674,56 +781,63 @@ app.get('/api/orders', authenticateToken, (req, res) => {
 });
 
 app.post('/api/orders', authenticateToken, (req, res) => {
-  const orderData = req.body;
-  const orderId = Date.now().toString();
-  const now = new Date().toISOString();
+  try {
+    const orderData = req.body;
+    const orderId = Date.now().toString();
+    const now = new Date().toISOString();
 
-  const order = {
-    id: orderId,
-    customer_id: orderData.customerId,
-    customer_name: orderData.customerName,
-    customer_phone: orderData.customerPhone,
-    farmer_id: orderData.farmerId,
-    total: orderData.total,
-    status: orderData.status,
-    delivery_address: orderData.deliveryAddress,
-    estimated_delivery: orderData.estimatedDelivery,
-    notes: orderData.notes,
-    created_at: now
-  };
+    const order = {
+      id: orderId,
+      customer_id: orderData.customerId,
+      customer_name: orderData.customerName,
+      customer_phone: orderData.customerPhone,
+      farmer_id: orderData.farmerId,
+      total: orderData.total,
+      status: orderData.status,
+      delivery_address: orderData.deliveryAddress,
+      estimated_delivery: orderData.estimatedDelivery,
+      notes: orderData.notes,
+      created_at: now
+    };
 
-  db.run(
-    `INSERT INTO orders (id, customer_id, customer_name, customer_phone, farmer_id, total, status, delivery_address, estimated_delivery, notes, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    Object.values(order),
-    function(err) {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
+    db.run(
+      `INSERT INTO orders (id, customer_id, customer_name, customer_phone, farmer_id, total, status, delivery_address, estimated_delivery, notes, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      Object.values(order),
+      function(err) {
+        if (err) {
+          console.error('Database error:', err);
+          return res.status(500).json({ error: 'Database error' });
+        }
+
+        // Insert order items
+        const insertItems = orderData.products.map(item => {
+          return new Promise((resolve, reject) => {
+            db.run(
+              'INSERT INTO order_items (id, order_id, product_id, product_name, quantity, price) VALUES (?, ?, ?, ?, ?, ?)',
+              [Date.now() + Math.random(), orderId, item.productId, item.productName, item.quantity, item.price],
+              (err) => {
+                if (err) reject(err);
+                else resolve();
+              }
+            );
+          });
+        });
+
+        Promise.all(insertItems)
+          .then(() => {
+            res.json({ id: orderId, ...orderData, createdAt: now });
+          })
+          .catch((err) => {
+            console.error('Error inserting order items:', err);
+            res.status(500).json({ error: 'Error inserting order items' });
+          });
       }
-
-      // Insert order items
-      const insertItems = orderData.products.map(item => {
-        return new Promise((resolve, reject) => {
-          db.run(
-            'INSERT INTO order_items (id, order_id, product_id, product_name, quantity, price) VALUES (?, ?, ?, ?, ?, ?)',
-            [Date.now() + Math.random(), orderId, item.productId, item.productName, item.quantity, item.price],
-            (err) => {
-              if (err) reject(err);
-              else resolve();
-            }
-          );
-        });
-      });
-
-      Promise.all(insertItems)
-        .then(() => {
-          res.json({ id: orderId, ...orderData });
-        })
-        .catch(() => {
-          res.status(500).json({ error: 'Error inserting order items' });
-        });
-    }
-  );
+    );
+  } catch (error) {
+    console.error('Create order error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 app.put('/api/orders/:id/status', authenticateToken, (req, res) => {
@@ -732,6 +846,7 @@ app.put('/api/orders/:id/status', authenticateToken, (req, res) => {
 
   db.run('UPDATE orders SET status = ? WHERE id = ?', [status, id], function(err) {
     if (err) {
+      console.error('Database error:', err);
       return res.status(500).json({ error: 'Database error' });
     }
 
@@ -743,9 +858,31 @@ app.put('/api/orders/:id/status', authenticateToken, (req, res) => {
   });
 });
 
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
+// Error handling middleware
+app.use(handleError);
+
 // Initialize database and start server
 initializeDatabase();
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Health check: http://localhost:${PORT}/api/health`);
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('Shutting down server...');
+  db.close((err) => {
+    if (err) {
+      console.error('Error closing database:', err);
+    } else {
+      console.log('Database connection closed');
+    }
+    process.exit(0);
+  });
 });

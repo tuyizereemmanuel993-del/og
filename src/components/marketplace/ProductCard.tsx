@@ -17,9 +17,13 @@ export function ProductCard({ product, farmer, distance, onAddToCart }: ProductC
     <Card padding="none" className="overflow-hidden hover:shadow-md transition-shadow">
       <div className="aspect-w-16 aspect-h-9 bg-gray-200">
         <img
-          src={product.images[0]}
+          src={product.images[0] || 'https://images.pexels.com/photos/1059943/pexels-photo-1059943.jpeg?auto=compress&cs=tinysrgb&w=400'}
           alt={product.name}
           className="w-full h-48 object-cover"
+          onError={(e) => {
+            const target = e.target as HTMLImageElement;
+            target.src = 'https://images.pexels.com/photos/1059943/pexels-photo-1059943.jpeg?auto=compress&cs=tinysrgb&w=400';
+          }}
         />
       </div>
       

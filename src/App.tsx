@@ -21,7 +21,14 @@ function App() {
 
   React.useEffect(() => {
     // Initialize sample data on app start
-    initializeSampleData();
+    const initData = async () => {
+      try {
+        await initializeSampleData();
+      } catch (error) {
+        console.error('Error initializing sample data:', error);
+      }
+    };
+    initData();
   }, []);
 
   const handleAddToCart = (productId: string) => {
